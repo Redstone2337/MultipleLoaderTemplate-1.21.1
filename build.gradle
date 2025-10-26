@@ -53,46 +53,76 @@ subprojects {
 
 // === 数据生成任务 ===
 
-tasks.register('generateDataAll') {
+tasks.register('generateData') {
     group = 'data generation'
-    description = 'Run data generation for both Fabric and NeoForge platforms'
+    description = 'Run data generation using Fabric (for both platforms)'
 
-    dependsOn ':fabric:generateData', ':neoforge:runData'
+    dependsOn ':fabric:generateData'
 
     doFirst {
-        println "♻️ 开始为所有平台生成数据..."
+        println "♻️ 开始使用 Fabric 生成数据（适用于双平台）..."
     }
 
     doLast {
-        println "✅ 所有平台数据生成完成！"
+        println "✅ Fabric 数据生成完成！"
 
-        def fabricDataDir = project(':fabric').file('src/main/generated')
-        def neoForgeDataDir = project(':neoforge').file('src/generated/resources')
-
-        println "❇️ Fabric 数据位置: ${fabricDataDir}"
-        println "❇️ NeoForge 数据位置: ${neoForgeDataDir}"
+        // 检查通用生成目录
+        def commonDataDir = project(':common').file('src/generated/resources')
+        println "📁 通用数据位置: ${commonDataDir}"
 
         // 统计生成的文件
-        def countFiles = { dir ->
-            if (!dir.exists()) return 0
-            def files = []
-            dir.eachFileReclect { file -> if (file.isFile()) files << file }
-            return files.size()
-        }
+        if (commonDataDir.exists()) {
+            def fileCount = 0
+            def dirCount = 0
 
-        println "📊 Fabric 生成文件数: ${countFiles(fabricDataDir)}"
-        println "📊 NeoForge 生成文件数: ${countFiles(neoForgeDataDir)}"
+            commonDataDir.eachFileRecurse { file ->
+                if (file.isFile()) {
+                    fileCount++
+                } else if (file.isDirectory() && file != commonDataDir) {
+                    dirCount++
+                }
+            }
+
+            println "📊 总生成文件数: ${fileCount}"
+            println "📁 总生成目录数: ${dirCount}"
+
+            // 显示文件类型统计
+            if (fileCount > 0) {
+                def fileTypes = [:]
+                commonDataDir.eachFileRecurse { file ->
+                    if (file.isFile()) {
+                        def ext = file.name.substring(file.name.lastIndexOf('.') + 1)
+                        fileTypes[ext] = (fileTypes[ext] ?: 0) + 1
+                    }
+                }
+
+                println "📄 文件类型统计:"
+                fileTypes.each { ext, count ->
+                    println "   ${ext.toUpperCase()}: ${count} 个"
+                }
+
+                // 显示顶级目录结构
+                println "📁 目录结构:"
+                commonDataDir.eachDir { dir ->
+                    def subFiles = []
+                    dir.eachFileRecurse { file -> if (file.isFile()) subFiles << file }
+                    println "   📂 ${dir.name}/ (${subFiles.size()} 个文件)"
+                }
+            }
+        } else {
+            println "⚠️ 警告: 通用数据目录不存在"
+        }
     }
 }
 
-tasks.register('cleanGeneratedDataAll') {
+tasks.register('cleanGeneratedData') {
     group = 'data generation'
-    description = 'Clean all generated data from both platforms'
+    description = 'Clean all generated data'
 
-    dependsOn ':fabric:cleanGeneratedData', ':neoforge:cleanGeneratedData'
+    dependsOn ':common:cleanGeneratedData'
 
     doLast {
-        println "✅ 已清理所有平台的生成数据"
+        println "✅ 已清理所有生成数据"
     }
 }
 
@@ -106,21 +136,15 @@ afterEvaluate {
         archiveClassifier = 'universal'
         destinationDirectory = layout.buildDirectory.dir('libs')
 
-        // 依赖关系
-        dependsOn ':fabric:build', ':neoforge:build', ':common:build', 'generateDataAll'
+        // 依赖关系 - 只使用 Fabric 数据生成
+        dependsOn ':fabric:build', ':neoforge:build', ':common:build', 'generateData'
 
         def fabricJarProvider = project(':fabric').tasks.named('remapJar').flatMap { it.archiveFile }
         def neoForgeJarProvider = project(':neoforge').tasks.named('jar').flatMap { it.archiveFile }
         def commonResourcesDir = project(':common').sourceSets.main.resources.srcDirs[0]
 
-        // 包含 Fabric 生成的数据
-        from(project(':fabric').file('src/main/generated')) {
-            into 'assets'
-            include '**/*'
-        }
-
-        // 包含 NeoForge 生成的数据
-        from(project(':neoforge').file('src/generated/resources')) {
+        // 包含通用模块生成的数据（由 Fabric 生成）
+        from(project(':common').file('src/generated/resources')) {
             into 'assets'
             include '**/*'
         }
@@ -147,7 +171,8 @@ afterEvaluate {
 
         doFirst {
             println "♻️ 开始构建通用模组 JAR..."
-            println "📦 包含: Fabric + NeoForge + Common + 生成的数据"
+            println "📦 包含: Fabric + NeoForge + Common + Fabric生成的数据"
+            println "📁 数据来源: Fabric 数据生成 -> 通用模块"
         }
 
         doLast {
@@ -170,6 +195,20 @@ afterEvaluate {
             println "   ✅ Mixins 配置: ${hasMixins}"
             println "   📁 资源文件: ${assetCount} 个"
             println "   📁 数据文件: ${dataCount} 个"
+
+            // 检查生成的数据
+            def generatedAssets = jarContents.findAll {
+                it.startsWith('assets/') &&
+                        (it.contains('/lang/') || it.contains('/models/') || it.contains('/textures/') || it.contains('/blockstates/'))
+            }
+            println "   🎨 生成资源: ${generatedAssets.size()} 个"
+
+            if (generatedAssets.size() > 0) {
+                println "   📄 生成资源示例:"
+                generatedAssets.take(5).each { file ->
+                    println "     - ${file}"
+                }
+            }
         }
 
         manifest {
@@ -250,37 +289,6 @@ tasks.register('buildAll') {
     }
 }
 
-tasks.register('buildAllSources') {
-    group = 'build'
-    description = 'Build all source jars including universal source jar'
-
-    dependsOn 'fabric:sourcesJar', 'neoforge:sourcesJar', 'common:sourcesJar', 'buildUniversalSourceJar'
-
-    doLast {
-        println "✅ 所有源码 JAR 构建完成"
-    }
-}
-
-tasks.register('verifySubprojects') {
-    group = 'verification'
-    description = 'Verify all subprojects are configured correctly'
-
-    doLast {
-        println "🔍 验证子项目配置..."
-
-        def requiredProjects = ['fabric', 'neoforge', 'common']
-        requiredProjects.each { projectName ->
-            if (project.childProjects.containsKey(projectName)) {
-                println "✅ ${projectName} 项目存在"
-            } else {
-                println "❌ ${projectName} 项目缺失"
-            }
-        }
-
-        println "✅ 子项目验证完成"
-    }
-}
-
 tasks.register('projectInfo') {
     group = 'help'
     description = 'Display project information'
@@ -294,16 +302,20 @@ tasks.register('projectInfo') {
    Minecraft: ${rootProject.minecraft_version}
 
 🛠️ 可用任务:
-   📊 generateDataAll    - 为所有平台生成数据
+   📊 generateData       - 使用 Fabric 生成数据（双平台共享）
    📦 buildUniversalJar  - 构建通用模组 JAR
    🚀 release            - 构建所有发布构件
    🔨 buildAll           - 构建所有模块
-   🧹 cleanGeneratedDataAll - 清理生成的数据
+   🧹 cleanGeneratedData - 清理生成的数据
 
 💡 快速开始:
-   ./gradlew generateDataAll    # 生成数据
+   ./gradlew generateData       # 生成数据（Fabric）
    ./gradlew buildUniversalJar  # 构建通用 JAR
    ./gradlew release            # 完整发布
+
+📝 注意:
+   当前使用 Fabric 数据生成器为双平台生成数据
+   NeoForge 数据生成已禁用
         """
     }
 }

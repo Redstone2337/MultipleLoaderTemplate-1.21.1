@@ -33,16 +33,15 @@ loom {
             configName = "Fabric Server"
             ideConfigGenerated(true)
             runDir = "run/server"
-            // 修复：使用 programArgs 而不是 programArgument
             programArgs '--nogui'
         }
 
-        // 数据生成配置
+        // 数据生成配置 - 输出到通用模块（为双平台生成数据）
         datagenClient {
             inherit client
             name "Data Generation"
             vmArg "-Dfabric-api.datagen"
-            vmArg "-Dfabric-api.datagen.output-dir=${file("src/main/generated")}"
+            vmArg "-Dfabric-api.datagen.output-dir=${file("../common/src/generated/resources")}"
             vmArg "-Dfabric-api.datagen.modid=${mod_id}"
             runDir "build/datagen"
         }
@@ -59,11 +58,11 @@ loom {
     }
 }
 
-// 源集配置
+// 源集配置 - 包含通用生成数据
 sourceSets {
     main {
         resources {
-            srcDirs += ['src/main/generated']
+            srcDirs += ['../common/src/generated/resources']
         }
     }
 }
@@ -79,9 +78,6 @@ dependencies {
 
     // Common 模块
     implementation project(":common")
-
-    // 可选：模组菜单
-    // modImplementation "com.terraformersmc:modmenu:7.2.2"
 }
 
 // 资源处理
@@ -121,16 +117,17 @@ tasks.named('compileJava') {
 
 tasks.register('generateData') {
     group = 'fabric'
-    description = 'Runs the Fabric data generator'
+    description = 'Runs the Fabric data generator (for both platforms)'
 
     dependsOn 'runDatagenClient'
 
     doFirst {
-        println "♻️ 开始 Fabric 数据生成..."
+        println "♻️ 开始 Fabric 数据生成（为双平台生成数据）..."
+        println "📁 输出目录: ${file("../common/src/generated/resources")}"
     }
 
     doLast {
-        def generatedDir = file("src/main/generated")
+        def generatedDir = file("../common/src/generated/resources")
         if (generatedDir.exists()) {
             def fileCount = 0
             def dirCount = 0
@@ -148,16 +145,27 @@ tasks.register('generateData') {
             println "📁 生成目录数: ${dirCount}"
             println "📂 输出目录: ${generatedDir}"
 
-            // 显示顶级目录结构
-            if (generatedDir.listFiles()) {
-                println "📄 生成的目录结构:"
-                generatedDir.eachFile { file ->
-                    if (file.isDirectory()) {
-                        def subFiles = file.listFiles()?.size() ?: 0
-                        println "   📁 ${file.name}/ (${subFiles} 个文件)"
-                    } else {
-                        println "   📄 ${file.name}"
+            // 显示文件类型统计
+            if (fileCount > 0) {
+                def fileTypes = [:]
+                generatedDir.eachFileRecurse { file ->
+                    if (file.isFile()) {
+                        def ext = file.name.substring(file.name.lastIndexOf('.') + 1)
+                        fileTypes[ext] = (fileTypes[ext] ?: 0) + 1
                     }
+                }
+
+                println "📄 生成的文件类型:"
+                fileTypes.each { ext, count ->
+                    println "   ${ext.toUpperCase()}: ${count} 个"
+                }
+
+                // 显示顶级目录结构
+                println "📁 目录结构:"
+                generatedDir.eachDir { dir ->
+                    def subFiles = []
+                    dir.eachFileRecurse { file -> if (file.isFile()) subFiles << file }
+                    println "   📂 ${dir.name}/ (${subFiles.size()} 个文件)"
                 }
             }
         } else {
@@ -170,11 +178,28 @@ tasks.register('cleanGeneratedData', Delete) {
     group = 'fabric'
     description = 'Cleans generated data files'
 
-    delete file("src/main/generated")
+    delete file("../common/src/generated/resources")
 
     doLast {
         println "✅ 已清理 Fabric 生成的数据"
     }
+}
+
+// 创建数据生成目录的任务
+tasks.register('createDataGenDirs') {
+    doLast {
+        def commonGenDir = file("../common/src/generated/resources")
+
+        if (!commonGenDir.exists()) {
+            commonGenDir.mkdirs()
+            println "✅ 创建通用数据生成目录: ${commonGenDir}"
+        }
+    }
+}
+
+// 数据生成前创建目录
+tasks.named('runDatagenClient') {
+    dependsOn 'createDataGenDirs'
 }
 
 // 清理任务
@@ -182,17 +207,11 @@ tasks.named('clean') {
     dependsOn 'cleanGeneratedData'
 }
 
-// 发布配置
 publishing {
     publications {
         mavenJava(MavenPublication) {
             artifactId = base.archivesName.get()
             from components.java
-
-            pom {
-                name = "${rootProject.mod_name} (Fabric)"
-                description = rootProject.mod_description
-            }
         }
     }
 }
@@ -202,46 +221,6 @@ idea {
     module {
         downloadSources = true
         downloadJavadoc = true
-        generatedSourceDirs += file('src/main/generated')
-    }
-}
-
-eclipse {
-    classpath {
-        file {
-            whenMerged {
-                def generated = new org.gradle.plugins.ide.eclipse.model.SourceFolder('src/main/generated', null)
-                entries += generated
-            }
-        }
-    }
-}
-
-// 调试信息任务
-tasks.register('debugLoomConfig') {
-    group = 'help'
-    description = 'Debug Loom configuration'
-
-    doLast {
-        println "🔧 Loom 配置调试信息:"
-        println "   Loom 版本: ${loom_version}"
-        println "   Minecraft 版本: ${minecraft_version}"
-        println "   Yarn 映射: ${yarn_mappings}"
-        println "   Fabric Loader: ${fabric_loader_version}"
-        println "   Fabric API: ${fabric_api_version}"
-
-        // 检查运行配置
-        println "   📋 运行配置:"
-        loom.runs.configureEach { runConfig ->
-            println "     - ${runConfig.name}:"
-            println "       类型: ${runConfig.configName}"
-            println "       运行目录: ${runConfig.runDir}"
-            if (runConfig.hasProperty('programArgs')) {
-                println "       程序参数: ${runConfig.programArgs}"
-            }
-            if (runConfig.hasProperty('vmArgs')) {
-                println "       VM 参数: ${runConfig.vmArgs}"
-            }
-        }
+        generatedSourceDirs += file('../common/src/generated/resources')
     }
 }

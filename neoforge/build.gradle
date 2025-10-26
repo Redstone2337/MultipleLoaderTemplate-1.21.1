@@ -22,19 +22,6 @@ tasks.register('cleanModDevCache', Delete) {
     delete 'build/moddev'
 }
 
-tasks.register('cleanGeneratedData', Delete) {
-    delete 'src/generated/resources'
-
-    doLast {
-        println "✅ 已清理 NeoForge 生成的数据"
-    }
-}
-
-// 运行任务配置
-tasks.withType(JavaExec).configureEach {
-    it.dependsOn('cleanModDevCache')
-}
-
 // NeoForge 配置
 neoForge {
     version = rootProject.neo_version
@@ -62,20 +49,7 @@ neoForge {
             systemProperty 'neoforge.enabledGameTestNamespaces', "${mod_id}"
         }
 
-        // 数据生成配置
-        data {
-            data()
-            programArguments.addAll '--mod', "${mod_id}", '--all',
-                    '--output', file('src/generated/resources/').getAbsolutePath(),
-                    '--existing', file('src/main/resources/').getAbsolutePath()
-            systemProperty 'neoforge.enabledGameTestNamespaces', "${mod_id}"
-            systemProperty 'neoforge.datagen', 'true'
-        }
-
-        configureEach {
-            systemProperty 'forge.logging.markers', 'REGISTRIES'
-            logLevel = org.slf4j.event.Level.DEBUG
-        }
+        // 移除数据生成配置 - 使用 Fabric 生成的数据
     }
 
     mods {
@@ -104,10 +78,8 @@ dependencies {
     implementation project(":common")
 }
 
-// 源集配置
-sourceSets.main.resources {
-    srcDir 'src/generated/resources'
-}
+// 源集配置 - 包含通用生成数据（由 Fabric 生成）
+sourceSets.main.resources.srcDir '../common/src/generated/resources'
 
 // 模组元数据生成
 tasks.register("generateModMetadata", ProcessResources) {
@@ -132,90 +104,25 @@ tasks.register("generateModMetadata", ProcessResources) {
 sourceSets.main.resources.srcDir tasks.generateModMetadata
 neoForge.ideSyncTask tasks.generateModMetadata
 
-// 资源处理
-processResources {
-    // 可以在这里添加资源过滤或处理逻辑
-}
-
 // 编译配置
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
-    options.compilerArgs.addAll(['-Xmaxerrs', '1000'])
 }
 
 tasks.named('compileJava') {
     dependsOn(':common:compileJava')
 }
 
-// === 数据生成验证 ===
-
-tasks.register('verifyDataGeneration') {
-    group = 'verification'
-    description = 'Verifies that data generation completed successfully'
-
-    doLast {
-        def generatedDir = file('src/generated/resources')
-        if (generatedDir.exists()) {
-            def files = []
-            generatedDir.eachFileReclect { file -> if (file.isFile()) files << file }
-
-            println "✅ NeoForge 数据生成验证"
-            println "📊 生成文件数: ${files.size()}"
-
-            if (files.size() > 0) {
-                println "📄 生成的文件类型:"
-                def fileTypes = files.collect { it.name.substring(it.name.lastIndexOf('.') + 1) }.unique()
-                fileTypes.each { type ->
-                    def count = files.count { it.name.endsWith(".${type}") }
-                    println "   ${type.toUpperCase()}: ${count} 个"
-                }
-
-                // 显示目录结构
-                println "📁 目录结构:"
-                generatedDir.eachDir { dir ->
-                    println "   📂 ${dir.name}/"
-                    dir.eachFile { file ->
-                        if (file.isFile()) {
-                            println "     📄 ${file.name}"
-                        }
-                    }
-                }
-            }
-        } else {
-            println "❌ NeoForge 数据生成失败: 输出目录不存在"
-        }
-    }
-}
-
-// 数据生成后执行验证
-tasks.named('runData') {
-    finalizedBy 'verifyDataGeneration'
-
-    doFirst {
-        println "♻️ 开始 NeoForge 数据生成..."
-    }
-
-    doLast {
-        println "✅ NeoForge 数据生成任务完成"
-    }
-}
-
 // 清理任务
 tasks.named('clean') {
-    dependsOn 'cleanGeneratedData', 'cleanModDevCache'
+    dependsOn 'cleanModDevCache'
 }
 
-// 发布配置
 publishing {
     publications {
         mavenJava(MavenPublication) {
             artifactId = base.archivesName.get()
             from components.java
-
-            pom {
-                name = "${rootProject.mod_name} (NeoForge)"
-                description = rootProject.mod_description
-            }
         }
     }
 }
@@ -225,6 +132,28 @@ idea {
     module {
         downloadSources = true
         downloadJavadoc = true
-        generatedSourceDirs += file('src/generated/resources')
+        generatedSourceDirs += file('../common/src/generated/resources')
+    }
+}
+
+// 信息任务
+tasks.register('dataGenInfo') {
+    group = 'help'
+    description = 'Display data generation information'
+
+    doLast {
+        println """
+📊 数据生成信息:
+   当前配置: 使用 Fabric 数据生成器为双平台生成数据
+   数据位置: ../common/src/generated/resources
+   
+💡 使用方法:
+   ./gradlew generateData     # 运行 Fabric 数据生成
+   ./gradlew fabric:generateData  # 同上
+   
+📝 注意:
+   NeoForge 数据生成已禁用
+   所有平台共享 Fabric 生成的数据
+        """
     }
 }

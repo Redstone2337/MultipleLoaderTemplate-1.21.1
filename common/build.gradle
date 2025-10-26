@@ -7,34 +7,17 @@ base {
     archivesName = "${rootProject.archives_name}-common"
 }
 
-// 数据生成共享配置
-sourceSets {
-    datagen {
-        compileClasspath += sourceSets.main.output
-        runtimeClasspath += sourceSets.main.output
-        java {
-            srcDir 'src/datagen/java'
-        }
-        resources {
-            srcDir 'src/datagen/resources'
-        }
-    }
-}
-
-configurations {
-    datagenImplementation.extendsFrom implementation
-    datagenRuntimeOnly.extendsFrom runtimeOnly
+// 添加生成资源目录（Fabric 数据生成输出到这里）
+sourceSets.main.resources {
+    srcDir 'src/generated/resources'
 }
 
 dependencies {
     // 跨平台兼容依赖
     compileOnly "org.slf4j:slf4j-api:2.0.9"
 
-    // 数据生成基础依赖
+    // NeoForge 依赖（用于编译时）
     compileOnly "net.neoforged:neoforge:${rootProject.neo_version}"
-
-    // 可选：添加通用数据生成工具
-    // datagenImplementation "com.google.guava:guava:32.1.2-jre"
 }
 
 // 处理资源文件
@@ -57,15 +40,17 @@ processResources {
     include "${rootProject.mod_id}.mixins.json"
 }
 
-// 数据生成任务
-tasks.register('buildDatagen', Jar) {
-    archiveBaseName = "${rootProject.archives_name}-datagen"
-    archiveClassifier = 'datagen'
-    from sourceSets.datagen.output
+// 确保生成目录在清理时也被清理
+tasks.register('cleanGeneratedData', Delete) {
+    delete 'src/generated/resources'
 
     doLast {
-        println "✅ 数据生成工具 JAR 构建完成"
+        println "✅ 已清理 Common 生成数据"
     }
+}
+
+tasks.named('clean') {
+    dependsOn 'cleanGeneratedData'
 }
 
 // 源码 JAR
@@ -74,37 +59,14 @@ tasks.register('commonSourcesJar', Jar) {
     archiveBaseName = "${rootProject.archives_name}-common"
     archiveClassifier = 'sources'
     from sourceSets.main.allSource
-
-    doLast {
-        println "✅ Common 源码 JAR 构建完成"
-    }
 }
 
-// 发布配置
 publishing {
     publications {
         mavenCommon(MavenPublication) {
             artifactId = "${rootProject.archives_name}-common"
             from components.java
             artifact commonSourcesJar
-
-            pom {
-                name = "${rootProject.mod_name} (Common)"
-                description = rootProject.mod_description
-                url = 'https://github.com/example/multiplatform-mod'
-
-                licenses {
-                    license {
-                        name = rootProject.mod_license
-                    }
-                }
-
-                developers {
-                    developer {
-                        name = rootProject.mod_authors
-                    }
-                }
-            }
         }
     }
 }
@@ -114,9 +76,6 @@ idea {
     module {
         downloadSources = true
         downloadJavadoc = true
-
-        // 标记数据生成源集
-        sourceDirs += file('src/datagen/java')
-        resourceDirs += file('src/datagen/resources')
+        generatedSourceDirs += file('src/generated/resources')
     }
 }
