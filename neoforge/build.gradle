@@ -2,6 +2,7 @@ plugins {
     id 'java-library'
     id 'maven-publish'
     id 'net.neoforged.moddev' version '2.0.115'
+    id 'idea'
 }
 
 version = mod_version
@@ -16,6 +17,25 @@ java {
     withSourcesJar()
 }
 
+// 清理任务
+tasks.register('cleanModDevCache', Delete) {
+    delete 'build/moddev'
+}
+
+tasks.register('cleanGeneratedData', Delete) {
+    delete 'src/generated/resources'
+
+    doLast {
+        println "✅ 已清理 NeoForge 生成的数据"
+    }
+}
+
+// 运行任务配置
+tasks.withType(JavaExec).configureEach {
+    it.dependsOn('cleanModDevCache')
+}
+
+// NeoForge 配置
 neoForge {
     version = rootProject.neo_version
 
@@ -27,24 +47,29 @@ neoForge {
     runs {
         client {
             client()
-            systemProperty 'neoforge.enabledGameTestNamespaces', rootProject.mod_id
+            systemProperty 'neoforge.enabledGameTestNamespaces', "${mod_id}"
+            programArgument '--username=Dev'
         }
 
         server {
             server()
             programArgument '--nogui'
-            systemProperty 'neoforge.enabledGameTestNamespaces', rootProject.mod_id
+            systemProperty 'neoforge.enabledGameTestNamespaces', "${mod_id}"
         }
 
         gameTestServer {
             type = "gameTestServer"
-            systemProperty 'neoforge.enabledGameTestNamespaces', rootProject.mod_id
+            systemProperty 'neoforge.enabledGameTestNamespaces', "${mod_id}"
         }
 
+        // 数据生成配置
         data {
             data()
-            // 使用官方模板的确切语法
-            programArguments.addAll '--mod', rootProject.mod_id, '--all', '--output', file('src/generated/resources/').getAbsolutePath(), '--existing', file('src/main/resources/').getAbsolutePath()
+            programArguments.addAll '--mod', "${mod_id}", '--all',
+                    '--output', file('src/generated/resources/').getAbsolutePath(),
+                    '--existing', file('src/main/resources/').getAbsolutePath()
+            systemProperty 'neoforge.enabledGameTestNamespaces', "${mod_id}"
+            systemProperty 'neoforge.datagen', 'true'
         }
 
         configureEach {
@@ -54,34 +79,37 @@ neoForge {
     }
 
     mods {
-        "${rootProject.mod_id}" {
+        "${mod_id}" {
             sourceSet(sourceSets.main)
         }
     }
 }
 
 repositories {
-    // 添加其他仓库
     maven {
         name = 'NeoForge'
         url = 'https://maven.neoforged.net/releases'
     }
+    maven {
+        name = 'ParchmentMC'
+        url = 'https://maven.parchmentmc.org'
+    }
 }
 
-// 设置localRuntime配置
 configurations {
     runtimeClasspath.extendsFrom localRuntime
 }
 
 dependencies {
-    //implementation "net.neoforged:neoforge:${rootProject.neo_version}"
     implementation project(":common")
 }
 
+// 源集配置
 sourceSets.main.resources {
     srcDir 'src/generated/resources'
 }
 
+// 模组元数据生成
 tasks.register("generateModMetadata", ProcessResources) {
     var replaceProperties = [
             minecraft_version: rootProject.minecraft_version,
@@ -104,25 +132,99 @@ tasks.register("generateModMetadata", ProcessResources) {
 sourceSets.main.resources.srcDir tasks.generateModMetadata
 neoForge.ideSyncTask tasks.generateModMetadata
 
-// 处理资源文件 - 不再排除通用的mixins配置文件
+// 资源处理
 processResources {
-    // 不再排除通用的mixins配置文件，因为我们要在通用JAR中使用特定平台的配置
-    // 而是在构建通用JAR时进行智能合并
+    // 可以在这里添加资源过滤或处理逻辑
 }
 
+// 编译配置
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    options.compilerArgs.addAll(['-Xmaxerrs', '1000'])
 }
 
 tasks.named('compileJava') {
     dependsOn(':common:compileJava')
 }
 
+// === 数据生成验证 ===
+
+tasks.register('verifyDataGeneration') {
+    group = 'verification'
+    description = 'Verifies that data generation completed successfully'
+
+    doLast {
+        def generatedDir = file('src/generated/resources')
+        if (generatedDir.exists()) {
+            def files = []
+            generatedDir.eachFileReclect { file -> if (file.isFile()) files << file }
+
+            println "✅ NeoForge 数据生成验证"
+            println "📊 生成文件数: ${files.size()}"
+
+            if (files.size() > 0) {
+                println "📄 生成的文件类型:"
+                def fileTypes = files.collect { it.name.substring(it.name.lastIndexOf('.') + 1) }.unique()
+                fileTypes.each { type ->
+                    def count = files.count { it.name.endsWith(".${type}") }
+                    println "   ${type.toUpperCase()}: ${count} 个"
+                }
+
+                // 显示目录结构
+                println "📁 目录结构:"
+                generatedDir.eachDir { dir ->
+                    println "   📂 ${dir.name}/"
+                    dir.eachFile { file ->
+                        if (file.isFile()) {
+                            println "     📄 ${file.name}"
+                        }
+                    }
+                }
+            }
+        } else {
+            println "❌ NeoForge 数据生成失败: 输出目录不存在"
+        }
+    }
+}
+
+// 数据生成后执行验证
+tasks.named('runData') {
+    finalizedBy 'verifyDataGeneration'
+
+    doFirst {
+        println "♻️ 开始 NeoForge 数据生成..."
+    }
+
+    doLast {
+        println "✅ NeoForge 数据生成任务完成"
+    }
+}
+
+// 清理任务
+tasks.named('clean') {
+    dependsOn 'cleanGeneratedData', 'cleanModDevCache'
+}
+
+// 发布配置
 publishing {
     publications {
         mavenJava(MavenPublication) {
             artifactId = base.archivesName.get()
             from components.java
+
+            pom {
+                name = "${rootProject.mod_name} (NeoForge)"
+                description = rootProject.mod_description
+            }
         }
+    }
+}
+
+// IDE 配置
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+        generatedSourceDirs += file('src/generated/resources')
     }
 }

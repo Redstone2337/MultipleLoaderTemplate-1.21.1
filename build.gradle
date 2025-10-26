@@ -3,6 +3,7 @@ import java.text.SimpleDateFormat
 plugins {
     id 'java'
     id 'maven-publish'
+    id 'idea'
 }
 
 allprojects {
@@ -19,12 +20,17 @@ allprojects {
             name = 'NeoForge'
             url = 'https://maven.neoforged.net/releases'
         }
+        maven {
+            name = 'ParchmentMC'
+            url = 'https://maven.parchmentmc.org'
+        }
     }
 }
 
 subprojects {
     apply plugin: 'java'
-    apply plugin: 'maven-publish'  // 修复：改为正确的插件ID
+    apply plugin: 'maven-publish'
+    apply plugin: 'idea'
 
     java {
         withSourcesJar()
@@ -36,110 +42,134 @@ subprojects {
         it.options.release = 21
         it.options.encoding = 'UTF-8'
     }
+
+    idea {
+        module {
+            downloadSources = true
+            downloadJavadoc = true
+        }
+    }
 }
 
-// 使用延迟配置来解决任务引用问题
+// === 数据生成任务 ===
+
+tasks.register('generateDataAll') {
+    group = 'data generation'
+    description = 'Run data generation for both Fabric and NeoForge platforms'
+
+    dependsOn ':fabric:generateData', ':neoforge:runData'
+
+    doFirst {
+        println "♻️ 开始为所有平台生成数据..."
+    }
+
+    doLast {
+        println "✅ 所有平台数据生成完成！"
+
+        def fabricDataDir = project(':fabric').file('src/main/generated')
+        def neoForgeDataDir = project(':neoforge').file('src/generated/resources')
+
+        println "❇️ Fabric 数据位置: ${fabricDataDir}"
+        println "❇️ NeoForge 数据位置: ${neoForgeDataDir}"
+
+        // 统计生成的文件
+        def countFiles = { dir ->
+            if (!dir.exists()) return 0
+            def files = []
+            dir.eachFileReclect { file -> if (file.isFile()) files << file }
+            return files.size()
+        }
+
+        println "📊 Fabric 生成文件数: ${countFiles(fabricDataDir)}"
+        println "📊 NeoForge 生成文件数: ${countFiles(neoForgeDataDir)}"
+    }
+}
+
+tasks.register('cleanGeneratedDataAll') {
+    group = 'data generation'
+    description = 'Clean all generated data from both platforms'
+
+    dependsOn ':fabric:cleanGeneratedData', ':neoforge:cleanGeneratedData'
+
+    doLast {
+        println "✅ 已清理所有平台的生成数据"
+    }
+}
+
+// === 通用构建任务 ===
+
 afterEvaluate {
-    // 创建智能多端合并Jar任务
+    // 通用模组 JAR（包含双端实现）
     tasks.register('buildUniversalJar', Jar) {
         archiveBaseName = "${rootProject.archives_name}"
         archiveVersion = rootProject.mod_version
         archiveClassifier = 'universal'
-        // 使用新的目录API设置目标目录
         destinationDirectory = layout.buildDirectory.dir('libs')
 
-        // 使用任务依赖而不是直接引用任务对象
-        dependsOn ':fabric:build', ':neoforge:build', ':common:build'
+        // 依赖关系
+        dependsOn ':fabric:build', ':neoforge:build', ':common:build', 'generateDataAll'
 
-        // 在配置阶段设置文件来源，而不是在执行阶段
         def fabricJarProvider = project(':fabric').tasks.named('remapJar').flatMap { it.archiveFile }
         def neoForgeJarProvider = project(':neoforge').tasks.named('jar').flatMap { it.archiveFile }
         def commonResourcesDir = project(':common').sourceSets.main.resources.srcDirs[0]
 
-        // 配置Fabric JAR内容 - 包含fabric.mod.json
+        // 包含 Fabric 生成的数据
+        from(project(':fabric').file('src/main/generated')) {
+            into 'assets'
+            include '**/*'
+        }
+
+        // 包含 NeoForge 生成的数据
+        from(project(':neoforge').file('src/generated/resources')) {
+            into 'assets'
+            include '**/*'
+        }
+
+        // Fabric JAR 内容
         from(fabricJarProvider.map { zipTree(it) }) {
-            // 不再排除Fabric特定的配置文件，确保fabric.mod.json被打包
-            // 只排除可能冲突的文件
-            exclude "${rootProject.mod_id}.mixins.json" // 使用Common的通用版本
+            exclude "${rootProject.mod_id}.mixins.json"
         }
 
-        // 配置NeoForge JAR内容 - 包含neoforge.mods.toml
+        // NeoForge JAR 内容
         from(neoForgeJarProvider.map { zipTree(it) }) {
-            // 不再排除NeoForge特定的配置文件，确保neoforge.mods.toml被打包
-            // 只排除可能冲突的文件
-            exclude "${rootProject.mod_id}.mixins.json" // 使用Common的通用版本
+            exclude "${rootProject.mod_id}.mixins.json"
         }
 
-        // 添加Common模块的资源文件 - 包含通用的mixins.json
+        // Common 资源
         from(commonResourcesDir) {
-            // 确保通用的mixins配置文件被包含
             include "${rootProject.mod_id}.mixins.json"
-            // 排除平台特定的清单文件，避免冲突
             exclude 'fabric.mod.json'
             exclude 'META-INF/mods.toml'
             exclude 'META-INF/neoforge.mods.toml'
         }
 
-        // 处理重复文件 - 使用第一个遇到的
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
 
         doFirst {
-            println "♻️开始构建通用模组jar..."
-            println "❇️Fabric jar: ${fabricJarProvider.get()}"
-            println "❇️NeoForge jar: ${neoForgeJarProvider.get()}"
-            println "❇️Common资源目录: ${commonResourcesDir}"
-
-            // 检查Common资源目录内容
-            if (commonResourcesDir.exists()) {
-                def resourceFiles = commonResourcesDir.listFiles()
-                println "❇️Common资源文件: ${resourceFiles?.collect { it.name } ?: '无'}"
-            } else {
-                println "⚠️警告: Common资源目录不存在 ${commonResourcesDir}"
-            }
+            println "♻️ 开始构建通用模组 JAR..."
+            println "📦 包含: Fabric + NeoForge + Common + 生成的数据"
         }
 
         doLast {
-            println "✅通用模组jar构建完成: ${archiveFile.get()}"
-            println "❇️文件大小: ${archiveFile.get().asFile.length()} bytes"
-
-            // 验证生成的JAR内容
-            println "♻️JAR内容验证:"
             def jarFile = archiveFile.get().asFile
             def jarContents = zipTree(jarFile).files.name
 
-            // 检查关键文件是否存在
-            def fabricManifest = jarContents.contains('fabric.mod.json')
-            def neoForgeManifest = jarContents.contains('META-INF/neoforge.mods.toml') || jarContents.contains('META-INF/mods.toml')
-            def mixinsFile = jarContents.contains("${rootProject.mod_id}.mixins.json")
+            println "✅ 通用模组 JAR 构建完成: ${jarFile.name}"
+            println "📦 文件大小: ${String.format("%.2f", jarFile.length() / 1024.0 / 1024.0)} MB"
 
-            println "❇️Fabric清单文件: ${fabricManifest ? '✅存在' : '❌缺失'}"
-            println "❇️NeoForge清单文件: ${neoForgeManifest ? '✅存在' : '❌缺失'}"
-            println "❇️Mixins配置文件: ${mixinsFile ? '✅存在' : '❌缺失'}"
+            // 验证内容
+            def hasFabricManifest = jarContents.contains('fabric.mod.json')
+            def hasNeoForgeManifest = jarContents.contains('META-INF/neoforge.mods.toml')
+            def hasMixins = jarContents.contains("${rootProject.mod_id}.mixins.json")
+            def assetCount = jarContents.count { it.startsWith('assets/') }
+            def dataCount = jarContents.count { it.startsWith('data/') }
 
-            // 检查资源文件
-            def resourceFiles = jarContents.findAll {
-                it.startsWith('assets/') || it.startsWith('data/') ||
-                        it.endsWith('.png') || it.endsWith('.json') && !it.endsWith('.mixins.json')
-            }
-            println "❇️资源文件数量: ${resourceFiles.size()}"
-
-            // 显示部分资源文件作为示例
-            if (resourceFiles.size() > 0) {
-                println "❇️部分资源文件示例:"
-                resourceFiles.take(10).each { file ->
-                    println "   - ${file}"
-                }
-                if (resourceFiles.size() > 10) {
-                    println "   ... 还有 ${resourceFiles.size() - 10} 个文件"
-                }
-            }
-
-            def conflictingFiles = jarContents.groupBy { it }.findAll { it.value.size() > 1 }.keySet()
-            if (conflictingFiles) {
-                println "⚠️警告: 发现重复文件: ${conflictingFiles}"
-            } else {
-                println "✅没有文件冲突"
-            }
+            println "🔍 JAR 内容验证:"
+            println "   ✅ Fabric 清单: ${hasFabricManifest}"
+            println "   ✅ NeoForge 清单: ${hasNeoForgeManifest}"
+            println "   ✅ Mixins 配置: ${hasMixins}"
+            println "   📁 资源文件: ${assetCount} 个"
+            println "   📁 数据文件: ${dataCount} 个"
         }
 
         manifest {
@@ -154,69 +184,31 @@ afterEvaluate {
         }
     }
 
-    // 创建通用源码Jar任务
+    // 通用源码 JAR
     tasks.register('buildUniversalSourceJar', Jar) {
         archiveBaseName = "${rootProject.archives_name}"
         archiveVersion = rootProject.mod_version
         archiveClassifier = 'universal-sources'
         destinationDirectory = layout.buildDirectory.dir('libs')
 
-        // 依赖所有子项目的源码Jar任务
         dependsOn ':fabric:sourcesJar', ':neoforge:sourcesJar', ':common:sourcesJar'
 
-        // 获取所有子项目的源码Jar
         def fabricSourceJarProvider = project(':fabric').tasks.named('sourcesJar').flatMap { it.archiveFile }
         def neoForgeSourceJarProvider = project(':neoforge').tasks.named('sourcesJar').flatMap { it.archiveFile }
         def commonSourceJarProvider = project(':common').tasks.named('sourcesJar').flatMap { it.archiveFile }
 
-        // 合并所有源码Jar
         from(fabricSourceJarProvider.map { zipTree(it) })
         from(neoForgeSourceJarProvider.map { zipTree(it) })
         from(commonSourceJarProvider.map { zipTree(it) })
 
-        // 处理重复文件
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
 
-        doFirst {
-            println "♻️开始构建通用源码jar..."
-            println "❇️Fabric 源码: ${fabricSourceJarProvider.get()}"
-            println "❇️NeoForge 源码: ${neoForgeSourceJarProvider.get()}"
-            println "❇️Common 源码: ${commonSourceJarProvider.get()}"
-        }
-
         doLast {
-            println "✅通用源码jar构建完成: ${archiveFile.get()}"
-            println "❇️文件大小: ${archiveFile.get().asFile.length()} bytes"
-
-            // 验证源码JAR内容
-            def jarFile = archiveFile.get().asFile
-            def jarContents = zipTree(jarFile).files.name
-            def javaFiles = jarContents.findAll { it.endsWith('.java') }
-            println "❇️包含Java源文件数量: ${javaFiles.size()}"
-        }
-
-        manifest {
-            attributes(
-                    'Built-By': System.getProperty('user.name'),
-                    'Build-Timestamp': new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ").format(new Date()),
-                    'Created-By': "Gradle ${gradle.gradleVersion}",
-                    'Build-Jdk': "${System.getProperty('java.version')} (${System.getProperty('java.vendor')} ${System.getProperty('java.vm.version')})",
-                    'Build-OS': "${System.getProperty('os.name')} ${System.getProperty('os.arch')} ${System.getProperty('os.version')}"
-            )
+            println "✅ 通用源码 JAR 构建完成"
         }
     }
 
-    // 配置任务组
-    tasks.named('buildUniversalJar') {
-        group = 'distribution'
-        description = 'Builds a universal jar containing both Fabric and NeoForge implementations'
-    }
-
-    tasks.named('buildUniversalSourceJar') {
-        group = 'distribution'
-        description = 'Builds a universal source jar containing sources from all platforms'
-    }
-
+    // 发布任务
     tasks.register('release') {
         group = 'distribution'
         description = 'Build all distribution artifacts'
@@ -224,19 +216,20 @@ afterEvaluate {
         dependsOn buildUniversalJar, buildUniversalSourceJar
 
         doLast {
-            println "✅所有发布构件构建完成！"
-            // 使用新的目录API替代已弃用的buildDir
             def libsDir = layout.buildDirectory.dir('libs').get().asFile
-            println "❇️位置: ${libsDir}"
-            println "📦可用构件:"
+            println "🎉 所有发布构件构建完成！"
+            println "📦 位置: ${libsDir}"
+
             libsDir.listFiles({ file -> file.name.endsWith('.jar') } as FileFilter)?.each { file ->
-                println "  - ${file.name} (${file.length()} bytes)"
+                def sizeMB = String.format("%.2f", file.length() / 1024.0 / 1024.0)
+                println "   📄 ${file.name} (${sizeMB} MB)"
             }
         }
     }
 }
 
-// 添加一个安全的通用构建任务，不依赖特定子项目任务
+// === 项目管理任务 ===
+
 tasks.register('buildAll') {
     group = 'build'
     description = 'Build all subprojects and create universal jars'
@@ -244,20 +237,19 @@ tasks.register('buildAll') {
     dependsOn 'fabric:build', 'neoforge:build', 'common:build', 'buildUniversalJar', 'buildUniversalSourceJar'
 
     doLast {
-        println "✅所有模块构建完成"
-        // 使用新的目录API替代已弃用的buildDir
-        def buildDir = layout.buildDirectory.get().asFile
-        println "✅构建目录: ${buildDir}"
+        println "✅ 所有模块构建完成"
 
         def libsDir = layout.buildDirectory.dir('libs').get().asFile
-        println "📦生成的JAR文件:"
-        libsDir.listFiles({ file -> file.name.endsWith('.jar') } as FileFilter)?.each { file ->
-            println "  - ${file.name} (${file.length()} bytes)"
+        def jars = libsDir.listFiles({ file -> file.name.endsWith('.jar') } as FileFilter)
+
+        println "📦 生成的 JAR 文件:"
+        jars?.each { file ->
+            def sizeMB = String.format("%.2f", file.length() / 1024.0 / 1024.0)
+            println "   📄 ${file.name} (${sizeMB} MB)"
         }
     }
 }
 
-// 添加一个任务来构建所有源码Jar
 tasks.register('buildAllSources') {
     group = 'build'
     description = 'Build all source jars including universal source jar'
@@ -265,119 +257,56 @@ tasks.register('buildAllSources') {
     dependsOn 'fabric:sourcesJar', 'neoforge:sourcesJar', 'common:sourcesJar', 'buildUniversalSourceJar'
 
     doLast {
-        println "✅所有源码Jar构建完成"
-
-        // 显示所有源码Jar的位置
-        def libsDir = layout.buildDirectory.dir('libs').get().asFile
-        println "📦源码JAR文件:"
-        libsDir.listFiles({ file -> file.name.contains('sources') && file.name.endsWith('.jar') } as FileFilter)?.each { file ->
-            println "  - ${file.name} (${file.length()} bytes)"
-        }
+        println "✅ 所有源码 JAR 构建完成"
     }
 }
 
-// 添加一个检查任务，验证子项目配置
 tasks.register('verifySubprojects') {
+    group = 'verification'
+    description = 'Verify all subprojects are configured correctly'
+
     doLast {
-        println "♻️验证子项目配置..."
+        println "🔍 验证子项目配置..."
 
-        // 检查fabric项目是否存在remapJar任务
-        if (project.childProjects.containsKey('fabric')) {
-            def fabricProject = project.childProjects['fabric']
-            if (fabricProject.tasks.named('remapJar')) {
-                println "✅Fabric项目配置正确"
-                // 使用新的目录API检查输出
-                def fabricBuildDir = fabricProject.layout.buildDirectory.get().asFile
-                println "❇️Fabric构建目录: ${fabricBuildDir}"
-
-                // 检查Fabric资源
-                def fabricResources = fabricProject.sourceSets.main.resources.srcDirs
-                println "❇️Fabric资源目录: ${fabricResources}"
-
-                // 检查fabric.mod.json是否存在
-                def fabricModJson = new File(fabricProject.projectDir, "src/main/resources/fabric.mod.json")
-                println "❇️fabric.mod.json: ${fabricModJson.exists() ? '✅存在' : '❌缺失'}"
+        def requiredProjects = ['fabric', 'neoforge', 'common']
+        requiredProjects.each { projectName ->
+            if (project.childProjects.containsKey(projectName)) {
+                println "✅ ${projectName} 项目存在"
             } else {
-                println "❌Fabric项目缺少remapJar任务"
-            }
-        } else {
-            println "❌找不到Fabric子项目"
-        }
-
-        // 检查neoforge项目是否存在jar任务
-        if (project.childProjects.containsKey('neoforge')) {
-            def neoForgeProject = project.childProjects['neoforge']
-            if (neoForgeProject.tasks.named('jar')) {
-                println "✅NeoForge项目配置正确"
-                // 使用新的目录API检查输出
-                def neoForgeBuildDir = neoForgeProject.layout.buildDirectory.get().asFile
-                println "❇️NeoForge构建目录: ${neoForgeBuildDir}"
-
-                // 检查NeoForge资源
-                def neoForgeResources = neoForgeProject.sourceSets.main.resources.srcDirs
-                println "❇️NeoForge资源目录: ${neoForgeResources}"
-
-                // 检查neoforge.mods.toml是否存在
-                def neoForgeModsToml = new File(neoForgeProject.projectDir, "src/main/resources/META-INF/neoforge.mods.toml")
-                def modsToml = new File(neoForgeProject.projectDir, "src/main/resources/META-INF/mods.toml")
-                println "❇️NeoForge清单文件: ${neoForgeModsToml.exists() || modsToml.exists() ? '✅存在' : '❌缺失'}"
-            } else {
-                println "❌NeoForge项目缺少jar任务"
-            }
-        } else {
-            println "❌找不到NeoForge子项目"
-        }
-
-        // 检查common项目
-        if (project.childProjects.containsKey('common')) {
-            def commonProject = project.childProjects['common']
-            println "✅Common项目配置正确"
-            // 使用新的目录API检查输出
-            def commonBuildDir = commonProject.layout.buildDirectory.get().asFile
-            println "❇️Common构建目录: ${commonBuildDir}"
-
-            // 检查Common资源
-            def commonResources = commonProject.sourceSets.main.resources.srcDirs
-            println "❇️Common资源目录: ${commonResources}"
-
-            // 列出Common资源文件
-            def commonResourceDir = commonProject.sourceSets.main.resources.srcDirs[0]
-            if (commonResourceDir.exists()) {
-                def resourceFiles = commonResourceDir.listFiles()
-                println "❇️Common资源文件: ${resourceFiles?.collect { it.name } ?: '无'}"
-
-                // 检查mixins.json是否存在
-                def mixinsJson = new File(commonResourceDir, "${rootProject.mod_id}.mixins.json")
-                println "❇️Common mixins.json: ${mixinsJson.exists() ? '✅存在' : '❌缺失'}"
-            } else {
-                println "⚠️警告: Common资源目录不存在 ${commonResourceDir}"
-            }
-        } else {
-            println "❌找不到Common子项目"
-        }
-
-        // 检查所有子项目是否有sourcesJar任务
-        project.childProjects.each { name, subproject ->
-            if (subproject.tasks.named('sourcesJar')) {
-                println "✅${name}项目配置了sourcesJar任务"
-            } else {
-                println "❌${name}项目缺少sourcesJar任务"
+                println "❌ ${projectName} 项目缺失"
             }
         }
+
+        println "✅ 子项目验证完成"
     }
 }
 
-// 添加一个任务来显示构建目录信息
-tasks.register('buildInfo') {
+tasks.register('projectInfo') {
     group = 'help'
-    description = 'Display build directory information'
+    description = 'Display project information'
 
     doLast {
-        println "❇️构建目录信息:"
-        println "✅根项目构建目录: ${layout.buildDirectory.get().asFile}"
+        println """
+🎯 项目信息:
+   名称: ${rootProject.name}
+   组: ${rootProject.maven_group}
+   版本: ${rootProject.mod_version}
+   Minecraft: ${rootProject.minecraft_version}
 
-        project.childProjects.each { name, subproject ->
-            println "✅${name} 子项目构建目录: ${subproject.layout.buildDirectory.get().asFile}"
-        }
+🛠️ 可用任务:
+   📊 generateDataAll    - 为所有平台生成数据
+   📦 buildUniversalJar  - 构建通用模组 JAR
+   🚀 release            - 构建所有发布构件
+   🔨 buildAll           - 构建所有模块
+   🧹 cleanGeneratedDataAll - 清理生成的数据
+
+💡 快速开始:
+   ./gradlew generateDataAll    # 生成数据
+   ./gradlew buildUniversalJar  # 构建通用 JAR
+   ./gradlew release            # 完整发布
+        """
     }
 }
+
+// 配置默认任务
+defaultTasks 'projectInfo'
