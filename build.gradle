@@ -149,21 +149,24 @@ afterEvaluate {
             include '**/*'
         }
 
-        // Fabric JAR 内容
-        from(fabricJarProvider.map { zipTree(it) }) {
-            exclude "${rootProject.mod_id}.mixins.json"
-        }
-
-        // NeoForge JAR 内容
-        from(neoForgeJarProvider.map { zipTree(it) }) {
-            exclude "${rootProject.mod_id}.mixins.json"
-        }
-
-        // Common 资源
+        // Common 资源 - 包含 Mixin 配置
         from(commonResourcesDir) {
             include "${rootProject.mod_id}.mixins.json"
             exclude 'fabric.mod.json'
             exclude 'META-INF/mods.toml'
+            exclude 'META-INF/neoforge.mods.toml'
+        }
+
+        // Fabric JAR 内容
+        from(fabricJarProvider.map { zipTree(it) }) {
+            exclude "${rootProject.mod_id}.mixins.json"  // 使用 common 的 mixin 配置
+            exclude 'fabric.mod.json'  // 排除 Fabric 清单
+        }
+
+        // NeoForge JAR 内容
+        from(neoForgeJarProvider.map { zipTree(it) }) {
+            exclude "${rootProject.mod_id}.mixins.json"  // 使用 common 的 mixin 配置
+            exclude 'META-INF/mods.toml'  // 排除 NeoForge 清单
             exclude 'META-INF/neoforge.mods.toml'
         }
 
@@ -173,6 +176,7 @@ afterEvaluate {
             println "♻️ 开始构建通用模组 JAR..."
             println "📦 包含: Fabric + NeoForge + Common + Fabric生成的数据"
             println "📁 数据来源: Fabric 数据生成 -> 通用模块"
+            println "🎯 Mixin 配置: 使用 Common 模块的统一配置"
         }
 
         doLast {
@@ -183,16 +187,18 @@ afterEvaluate {
             println "📦 文件大小: ${String.format("%.2f", jarFile.length() / 1024.0 / 1024.0)} MB"
 
             // 验证内容
-            def hasFabricManifest = jarContents.contains('fabric.mod.json')
-            def hasNeoForgeManifest = jarContents.contains('META-INF/neoforge.mods.toml')
+            def hasFabricContent = jarContents.any { it.contains('fabric') }
+            def hasNeoForgeContent = jarContents.any { it.contains('neoforge') }
             def hasMixins = jarContents.contains("${rootProject.mod_id}.mixins.json")
             def assetCount = jarContents.count { it.startsWith('assets/') }
             def dataCount = jarContents.count { it.startsWith('data/') }
+            def mixinCount = jarContents.count { it.contains('/mixin/') && it.endsWith('.class') }
 
             println "🔍 JAR 内容验证:"
-            println "   ✅ Fabric 清单: ${hasFabricManifest}"
-            println "   ✅ NeoForge 清单: ${hasNeoForgeManifest}"
+            println "   ✅ Fabric 内容: ${hasFabricContent}"
+            println "   ✅ NeoForge 内容: ${hasNeoForgeContent}"
             println "   ✅ Mixins 配置: ${hasMixins}"
+            println "   🎯 Mixin 类: ${mixinCount} 个"
             println "   📁 资源文件: ${assetCount} 个"
             println "   📁 数据文件: ${dataCount} 个"
 
@@ -316,6 +322,7 @@ tasks.register('projectInfo') {
 📝 注意:
    当前使用 Fabric 数据生成器为双平台生成数据
    NeoForge 数据生成已禁用
+   Mixin 配置统一放在 Common 模块
         """
     }
 }

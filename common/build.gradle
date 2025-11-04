@@ -1,3 +1,5 @@
+import groovy.json.JsonSlurper
+
 plugins {
     id 'java-library'
     id 'maven-publish'
@@ -12,12 +14,27 @@ sourceSets.main.resources {
     srcDir 'src/generated/resources'
 }
 
+// 配置Mixin源集
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java']
+        }
+        resources {
+            srcDirs = ['src/main/resources']
+        }
+    }
+}
+
 dependencies {
     // 跨平台兼容依赖
     compileOnly "org.slf4j:slf4j-api:2.0.9"
 
     // NeoForge 依赖（用于编译时）
     compileOnly "net.neoforged:neoforge:${rootProject.neo_version}"
+
+    // Mixin 注解处理器
+    annotationProcessor "org.spongepowered:mixin:0.8.5:processor"
 }
 
 // 处理资源文件
@@ -61,10 +78,32 @@ tasks.register('commonSourcesJar', Jar) {
     from sourceSets.main.allSource
 }
 
+// Mixin 配置验证任务
+tasks.register('validateMixinConfig') {
+    group = 'build'
+    description = 'Validate Mixin configuration'
+
+    doLast {
+        def mixinFile = file("src/main/resources/${rootProject.mod_id}.mixins.json")
+        if (mixinFile.exists()) {
+            println "✅ Mixin 配置文件存在: ${mixinFile.name}"
+            def mixinConfig = new JsonSlurper().parseText(mixinFile.text)
+            println "📋 Mixin 包: ${mixinConfig.package}"
+            println "🔧 Mixin 配置: ${mixinConfig.mixins ?: mixinConfig.client ?: 'N/A'}"
+        } else {
+            println "⚠️ 警告: Mixin 配置文件不存在: ${mixinFile.path}"
+        }
+    }
+}
+
+tasks.named('build') {
+    dependsOn 'validateMixinConfig'
+}
+
 publishing {
     publications {
         mavenCommon(MavenPublication) {
-            artifactId = "${rootProject.archives_name}-common"
+            artifactId = "${rootProject.archives_name}-common" as Publication
             from components.java
             artifact commonSourcesJar
         }

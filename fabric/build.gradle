@@ -58,12 +58,17 @@ loom {
     }
 }
 
-// 源集配置 - 包含通用生成数据
+// 源集配置 - 包含通用生成数据和Mixin
 sourceSets {
     main {
         resources {
-            srcDirs += ['../common/src/generated/resources']
+            srcDirs += [
+                    '../common/src/generated/resources',
+                    'src/main/resources'  // Fabric 特定资源
+            ]
         }
+        compileClasspath += files('../common/src/main/java')
+        runtimeClasspath += files('../common/src/main/java')
     }
 }
 
@@ -78,9 +83,12 @@ dependencies {
 
     // Common 模块
     implementation project(":common")
+
+    // Mixin
+    annotationProcessor "org.spongepowered:mixin:0.8.5:processor"
 }
 
-// 资源处理
+// 资源处理 - 仅处理Fabric特定资源
 processResources {
     inputs.property "version", project.version
 
@@ -96,6 +104,9 @@ processResources {
                 'loader_version': rootProject.fabric_loader_version
         )
     }
+
+    // 排除common的mixin配置，使用Fabric特定的
+    exclude "${rootProject.mod_id}.mixins.json"
 }
 
 // Java 配置
@@ -112,6 +123,20 @@ tasks.withType(JavaCompile).configureEach {
 tasks.named('compileJava') {
     dependsOn(':common:compileJava')
 }
+
+// 复制Common的Mixin到Fabric构建
+tasks.register('copyCommonMixins', Copy) {
+    from project(':common').file('src/main/java')
+    into layout.buildDirectory.dir('generated/sources/commonMixins/java/main')
+    include '**/*.java'
+    exclude '**/platform/**'  // 排除平台特定代码
+}
+
+tasks.named('compileJava') {
+    dependsOn 'copyCommonMixins'
+}
+
+sourceSets.main.java.srcDir layout.buildDirectory.dir('generated/sources/commonMixins/java/main')
 
 // === 数据生成任务 ===
 
